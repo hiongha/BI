@@ -1,0 +1,15 @@
+文件准备
+
+1.egfr.crc_location.txt
+根据/share/public/pipeline/cSMART170503/primer/primer.cfg.TM21_V1.3.reform的第五列提取/share/public/pipeline/cSMART170503/config/multiplex.TES.fa中的location信息.
+
+
+2. mustgiven_*.txt
+NM之前的列:拷贝苏星的配置文件.
+NM列:从/share/public/pipeline/170711_Amplicon_programV2/all_gene.txt中提取的信息
+mutation_type列:该文件中的都是必报点,苏星准备过一个crc_brief_from_lsx,直接用苏星的北肿报告示例中的表格整理即可,再用getMutationTypeFromBrief.py检查一遍对应关系.另外,others位点的mutationtype信息可以用getMutationTypeFromBrief.py从brief文件中提取.
+
+
+
+
+

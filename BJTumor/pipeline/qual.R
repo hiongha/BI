@@ -1,0 +1,5 @@
+args = commandArgs(trailingOnly=TRUE)
+data <- read.table(args[1], header=TRUE, row.names=1)
+png(args[2])
+plot(t(data),type='l', xlim=c(0,300), ylim=c(0,40), xlab='pos', ylab='quality', col='red', bty='l', xaxs='i', yaxs='i',las=1)
+dev.off()
