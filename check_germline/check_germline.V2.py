@@ -1,12 +1,11 @@
 #!/usr/bin/python
 #coding=utf-8
-#xinghe <xingh3223@berryoncology.com>
+import sys
 import re
 import os
 import time
 import glob
 import subprocess
-import sys
 import smtplib,ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -16,12 +15,55 @@ from email.utils import formatdate
 from email import encoders
 from collections import OrderedDict
 import paramiko
+import configparser
+
+reload(sys)
+sys.setdefaultencoding('utf-8')
 
 
-pipeline = '/share/work1/xinghe/proc/captools/check_germline'
+def get_NM_dic():
+	NM_dic1 = {}
+	NM_dic2 = {}
+	NM_dic3 = {}
+	i = 0
+	for each in NM_list:
+		i +=1
+		for line in open(each,'r'):
+			gene,NM = line.strip().split('\t')[0:2]
+			dic_id = 'NM_dic'+str(i)
+			locals()[dic_id][gene] = NM	
+	return NM_dic1, NM_dic2, NM_dic3
 
-def mail_1(dir,to_list,cc_list,subject,main_text,mail_user='oncology_bioinfo',mail_pass = 'herui2020.com',sender = 'oncology_bioinfo@berryoncology.com',formatting='plain'):
-	mail_host = 'mail.berryoncology.com'
+
+def panel_check(root):
+	if re.search(r'86gene',root):
+		panel = '86gene'
+	elif re.search(r'457gene',root):
+		panel = '457gene'
+	elif re.search(r'654gene',root):
+		panel = '654gene'
+	elif re.search(r'31gene',root) and not re.search('/LC_CRC',root):
+		panel = '31gene'
+	elif re.search(r'31gene',root) and re.search('/LC_CRC',root):
+		panel = '13gene'
+	elif re.search(r'WES_Plus',root):
+		panel = 'WESPlus'
+	else:
+		panel = 'unknow_panel'
+	return panel
+
+
+def get_list(line):
+	new_list = line.strip().split(',')
+	return new_list
+
+
+def mailer(dir,subject,main_text,formatting='plain',**kwargs):
+	'''Just a mail box.'''
+	for k,v in kwargs.items():
+		exec("%s"%(k) + "=" + "'%s'"%(str(v)))
+	to_list = to_list.strip().split(',')
+	cc_list = cc_list.strip().split(',')
 	receivers = to_list+cc_list
 	message = MIMEMultipart()
 	message['From'] = sender
@@ -40,19 +82,23 @@ def mail_1(dir,to_list,cc_list,subject,main_text,mail_user='oncology_bioinfo',ma
 		smtpObj.login(mail_user,mail_pass)
 		smtpObj.sendmail(sender,receivers,message.as_string())
 		smtpObj.quit()
-		print("邮件发送成功")
+		print("Send mail successfully!")
 	except smtplib.SMTPException:
-		print("Error:无法发送邮件")
+		print("Error:can't send mail normally!")
 
 
-#将已经发送germline审核邮件的flowcell写入done.txt文件中
 def rewrite(FC,done_file):
+	'''
+	write dealed flowcell number into '*.done.txt'
+	'''
 	with open(done_file,'a') as F2:
 		F2.write(FC+'\n')
 
 
-#获取没有进行审核germline的分析路径：
 def get_undone_fc(done_file,typ):
+	'''
+	get directories that germline result were not checked.
+	'''
 	done_fc = []
 	with open(done_file) as F:
 		for line in F:
@@ -64,6 +110,7 @@ def get_undone_fc(done_file,typ):
 
 
 def check_Somatic_interpretation(path):
+	'''check if somatic sites exists.'''
 	somatic_file = glob.glob(path+'/Somatic_interpretation/tumors_Clisig_reviewed.txt')	
 	Tumor_check_list = []
 	somatic_finish_flag = False	
@@ -72,31 +119,37 @@ def check_Somatic_interpretation(path):
 	Tumor_check_num = 0
 	if somatic_file == []:
 		somatic_finish_flag = False
-	else:
+
+	elif somatic_file != []:
 		somatic_file = somatic_file[0]
-		somatic_finish_flag = True
-		with open(somatic_file,'r') as F:
-			content = F.read()
-			parts = content.split('--------------------')
+		p = subprocess.Popen("grep 共计审核 %s"%(somatic_file),shell=True,
+							stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+							stderr=subprocess.PIPE,universal_newlines=True)
+		shifouwancheng = [m.strip() for m in p.stdout]
+		if len(shifouwancheng) == 0:
+			somatic_finish_flag = False
+		else:
+			somatic_finish_flag = True
+			with open(somatic_file,'r') as F:
+				content = F.read()
+				parts = content.split('--------------------')
 		
-		for each in parts:
-#			if re.search('该基因涉及DCE2.0用药，请对该突变ACMG判读结果进行审核',each):
+			for each in parts:
 				Tumor_check_list.append(each)
-		if len(Tumor_check_list) == 0:
-			somatic_check_flag = False
-			Tumor_check_line = ''
-		elif len(Tumor_check_list) >=1:
-			somatic_check_flag = True
-			Tumor_check_line = '--------------------'.join(Tumor_check_list)
-			Tumor_check_num = len(Tumor_check_list) - 1 
-			print(Tumor_check_line)
-		
+			if len(Tumor_check_list) == 0:
+				somatic_check_flag = False
+				Tumor_check_line = ''
+			elif len(Tumor_check_list) >=1:
+				somatic_check_flag = True
+				Tumor_check_line = '--------------------'.join(Tumor_check_list)
+				Tumor_check_num = len(Tumor_check_list) - 1 
 	return somatic_finish_flag,somatic_check_flag,Tumor_check_line,Tumor_check_num
 
 
 def QC_check(path):
+	'''get QC result.'''
 	file = path + '/QC.xls.new'
-	check_cols = [40,41,42,44,46]
+	check_cols = check_cols_ini
 	QC_check_dic = OrderedDict()
 	if not os.path.exists(file):
 		pass
@@ -105,29 +158,44 @@ def QC_check(path):
 			F.readline()
 			for line in F:
 				arr = line.strip().split('\t')
-				print(line)
 				check,Pairs,Contaminated,Contamination_level,QC_other_check =  [arr[i] for i in check_cols]	
-				print(check,Pairs,Contaminated,Contamination_level,QC_other_check)
 				Nsamp,Psamp = Pairs.split(':')			
 				QC_check_dic[Psamp] = [check,Pairs,Contaminated,Contamination_level,QC_other_check]		
 	return QC_check_dic
 
 
 def write_to_html(List):
-	print(List)
-	html = '<p>Hi all,</p><p></p><p>MSI results:</p><table style="font-size:13px" border="1" cellpadding="0" cellspacing="0" white-space:nowrap>'
+	'''wirte MSI results into html format'''
+	css = '''
+			<style type="text/css">
+				#msi{
+					border-collapse:collapse;
+				}
+				#msi th,#msi tr,#msi td {
+					font-size:12px;
+					border:1px solid #a1a1a1;
+					white-space:nowrap;
+				}
+			</style>
+			'''
+	html = css
+	html += ''' <p>Hi all,</p>
+				</br>
+				<p>MSI results:</p>
+				<table id="msi">'''
 	for each in List:
 		html += '<tr>'
 		for i in each:
 			html +='<td> %s </td>'%(str(i))
 		html += '</tr>'
-	html+= '</table>'
-	print('html=========')
-	print(html)
+	html += '</table>'
 	return html
 
 
 def msi_check(path):
+	'''
+	check MSI result.		
+	'''
 	file = path + '/msi/msi_combine.xls'
 	msiList = [['sample','MSIscore','MSIscore(0.49)','check','Pairs','Contaminated','Contamination_level','QC_other_check']]
 	QC_check_dic = QC_check(path)
@@ -152,9 +220,28 @@ def msi_check(path):
 					msiList.append(msi_info)
 	html = write_to_html(msiList)	
 	return html	
-		
+
+
+def get_final_qsub(all_status_files):
+	'''
+	sometimes the job would failed, and was qsub to clusters, so we need to find the final status file.	
+	'''
+	max = 0
+	max_dir = all_status_files[0]
+	for i in all_status_files:
+		if len(i.strip().split('.status')) > max:
+			max_dir = i.strip()
+			max = len(i.strip().split('.status'))
+	return max_dir 
+
+
 
 def multi_check(root,panel):
+	'''
+	check pair/germline/analysis status.
+
+	'''
+
 	for typ in ['germline','pair','finish']:
 		type_undone = []
 		type_done_file = pipeline+'/%s.done.txt'%(typ)
@@ -168,7 +255,8 @@ def multi_check(root,panel):
 				if (not os.path.exists(germline)) or (somatic_finish_flag==False):
 					continue
 
-				p = subprocess.Popen("grep 共计审核 %s"%(germline),shell=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
+				p = subprocess.Popen("grep 共计审核 %s"%(germline),shell=True,stdin=subprocess.PIPE,
+									stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
 
 				content_grep = ''.join([i.strip() for i in p.stdout])
 				count = len(content_grep)
@@ -177,13 +265,10 @@ def multi_check(root,panel):
 				else:
 					shenhe_count = re.search(r'共计审核(\d+)个突变位点',content_grep).group(1)
 					if int(shenhe_count) == 0 and not (somatic_finish_flag==True and somatic_check_flag==True):
-						to_list = ['xingh3223@berryoncology.com']
-						cc_list = []
+						germ_receiver = default_receiver
 					else:
 						if re.search(r'86gene|654gene|457gene|31gene|WES_Plus',root):
-							to_list = ['wun3623@berryoncology.com','zhangp4456@berryoncology.com']
-							cc_list = ['baijian488@berryoncology.com','jiangdzh3403@berryoncology.com','yangrutao796@berryoncology.com','wangzx3872@berryoncology.com','wujq3870@berryoncology.com','xufl3252@berryoncology.com','wangwt4475@berryoncology.com','liull4492@berryoncology.com','fangmg3899@berryoncology.com','xingh3223@berryoncology.com']
-					
+							germ_receiver = germline_receiver
 					content = []
 					flag = True
 					with open(germline,'r') as F1:
@@ -191,30 +276,29 @@ def multi_check(root,panel):
 							if flag == True:
 								content.append(each)
 					content = ''.join(content)
-					print(content)
 	
 					pF = open('%s/%s/pair.txt'%(root,dir),'r')
 					sample_count = str(len(pF.readlines()))
-					
 
-					subject = '[%s审]%s germline位点审核'%(panel.strip('gene'),dir)
-					main_text = '\n\nHi ,\n\n\t%s批次germline分析结果,请审核。\n\t共%s对样本,%s个位点需要审核。\n\t数据路径：%s/%s\n\n\n%s\n\n ====================================\n\nSomatic审核:\n\n%s'%(dir,sample_count,str(int(shenhe_count)+Tumor_check_num),root,dir,content,Tumor_check_line)
-					print('nimalegejide::::::::::::::::::::::::::::::::::::::::::::')
-					print(str(shenhe_count))
-					print(str(Tumor_check_num))
+					subject = '%s-%s审-%s'%(area,panel.strip('gene'),dir)
+					main_text = '\n\nHi ,\n\n\tPlease check germline results of %s. \n\n\t 共%s对样本,%s个位点. \
+								\n\n\tData path: %s/%s\n\n\n%s\n\n ====================================\n\n【Somatic Check】:\
+								\n\n%s'%(dir,sample_count,str(int(shenhe_count)+Tumor_check_num),root,dir,content,Tumor_check_line)
 					if re.search(r'86gene|654gene|457gene|31gene|WES_Plus',root):
-						mail_1(dir=dir,to_list = to_list,cc_list = cc_list,subject=subject,main_text=main_text,mail_user='oncology_mut_review',mail_pass = 'herui123.com',sender = 'oncology_mut_review@berryoncology.com')
+						mailer(dir=dir,subject=subject,main_text=main_text,**dict(germline_sender,**germ_receiver))
 					rewrite(FC=dir,done_file=type_done_file)
+
 		if typ == 'cnv':
 			for dir in undone_fc:
 				CNV_file = root+'/%s/CNV.xls'%(dir)
 				if not os.path.exists(CNV_file):
 					continue
-				subject = '[%sCNV]%s CNV审核'%(panel.strip('gene'),dir)
-				main_text = '\n\nHi 付龙飞,\n\n\t%s批次CNV分析结果已完成,请审核。\n\t数据路径：%s/%s\n\n\n '%(dir,root,dir)
+				subject = '%s-%sCNV-%s'%(area,panel.strip('gene'),dir)
+				main_text = '\n\nHi, \n\n\t%s CNV analysis is over, please check it. \n\tanalysis path%s/%s\n\n\n '%(dir,root,dir)
 				cc_list = []
-				mail_1(dir=dir,to_list = ['xingh3223@berryoncology.com'],cc_list = cc_list,subject=subject,main_text=main_text)
+				mailer(dir=dir,subject=subject,main_text=main_text,**default_sender.update(default_revceiver))
 				rewrite(FC=dir,done_file=type_done_file)
+
 		if typ == 'pair':
 			for dir in undone_fc:
 				pair_file = root+'/%s/getSamplecfg.log'%(dir)
@@ -225,38 +309,45 @@ def multi_check(root,panel):
 					pair_txt_content = pair_txt
 				if not os.path.exists(pair_file):
 					continue
-				p = subprocess.Popen("grep no %s"%(pair_file),shell=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
+				p = subprocess.Popen("grep no %s"%(pair_file),shell=True,stdin=subprocess.PIPE,
+									stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
 				sample_no_pair = [i.strip() for i in p.stdout]
 				count_pair = len(sample_no_pair)
 				if count_pair == 0:
-					subject = '[%s配]%s 样本可以不match'%(panel.strip('gene'),dir)
-					main_text = '\n\nHi 配对,\n\n\t%s批次不含有不配对样本。\n\npair.txt:\n%s\t数据路径：%s/%s\n\n\n '%(dir,pair_txt_content,root,dir)
-					mail_1(dir=dir,to_list = ['xingh3223@berryoncology.com'],cc_list = [],subject=subject,main_text=main_text)
+					subject = '%s-%s配-%s NOT EXISTS'%(area,panel.strip('gene'),dir)
+					main_text = '\n\nHi,\n\n\t%s batch NOT EXISTS non-matched samples.\n\npair.txt:\
+								\n%s\tData path is %s/%s\n\n\n '%(dir,pair_txt_content,root,dir)
+					mailer(dir=dir,subject=subject,main_text=main_text,**dict(default_sender,**default_receiver))
 				else:
-					subject = '[%s配]%s 样本可以不match'%(panel.strip('gene'),dir)
-					main_text = '\n\nHi 菜鸟,\n\n\t%s批次可能含有不配对样本:\n%s。\n\npair.txt:\n%s数据路径：%s/%s\n\n\n '%(dir,'\n'.join(sample_no_pair),pair_txt_content,root,dir)
-					mail_1(dir=dir,to_list = ['xingh3223@berryoncology.com'],cc_list = [],subject=subject,main_text=main_text)
+					subject = '%s-%s配-%s EXISTS'%(area,panel.strip('gene'),dir)
+					main_text = '\n\nHi sample match result,\n\n\t%s batch EXISTS non-matched samples \n%s.\n\npair.txt:\
+								\n%sData path is %s/%s\n\n\n '%(dir,'\n'.join(sample_no_pair),pair_txt_content,root,dir)
+					mailer(dir=dir,subject=subject,main_text=main_text,**dict(default_sender,**default_receiver))
 				rewrite(FC=dir,done_file=type_done_file)
 
 		if typ == 'finish':
 			for dir in undone_fc:
 				warn_file = root+'/%s/warnClosePos.txt'%(dir)
 				final_result_file = root+'/%s/%s.xls'%(dir,dir)
-				print(dir)
 				dir2 = dir.replace('_sup','').replace('_LC','').replace('_CRC','').replace('_info','').replace('_auto','').replace('_info','').replace('_sup','')
-				print('\n##########################################################')
-				print("newDir:"+dir2)
-				third_qsub = root+'/%s/%s.job.status.status.status'%(dir,dir2)
-				print("statusFile:"+third_qsub)
+				
+				all_status_files = glob.glob(root+'/%s/%s.job.*status'%(dir,dir2))
+				if len(all_status_files) < 3:
+					continue
+				elif len(all_status_files) == 3:
+					final_qsub = root+'/%s/%s.job.status.status.status'%(dir,dir2)
+				elif len(all_status_files) > 3:
+					final_qsub = get_final_qsub(all_status_files)
+
 				time_file = root +'/'+dir +'/' + dir2.replace('_sup','').replace('_auto','')+'.time.xls'
-
-
-				print("timeFile:"+time_file)	
-				if not (os.path.exists(third_qsub) and os.path.exists(time_file)):
+				if not (os.path.exists(final_qsub) and os.path.exists(time_file)):
 					continue
 
-				#flag1 status_done	
-				p3 = subprocess.Popen("grep status %s"%(third_qsub),shell=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
+				print('\n------------------------------------------------------------------------------')
+				print("New Analysis Directory: \n" + root + '/' + dir2)
+				#flag1 status_done: if job.status was finished.	
+				p3 = subprocess.Popen("grep status %s"%(final_qsub),shell=True,stdin=subprocess.PIPE,
+									stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
 				status_done = True
 				for eachstatus in p3.stdout:
 					if eachstatus.strip() != 'status done':
@@ -265,7 +356,6 @@ def multi_check(root,panel):
 				if status_done == False:
 					continue
 				no_dce_file = glob.glob(root+'/'+dir+'/*.no_dce.xls')
-				#200529_Novaseq_A00838_B_BH3MHGDSXY_csmart2.0_SPS_v20_31_LC.xls.no_dce.xls
 				if re.search(r'LC_CRC',root) and no_dce_file == []:
 					continue
 				else:
@@ -273,22 +363,24 @@ def multi_check(root,panel):
 
 				time.sleep(2)	
 	
-				#flag2 germline_flag2	
+				#flag2 germline_flag2: whether exists germline sites that need to be checked.	
 				germline_flag2 = False
 				germline2 = root+'/%s/germline/normals_germline_reviewed.txt'%(dir)
-				p2 = subprocess.Popen("grep 共计审核 %s"%(germline2),shell=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
+				p2 = subprocess.Popen("grep 共计审核 %s"%(germline2),shell=True,stdin=subprocess.PIPE,
+										stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
 				content_grep2 = ''.join([i.strip() for i in p2.stdout])
 				if re.search(r'共计审核0个突变位点',content_grep2):
 					germline_flag2 = True
 
+				#flag3 somatic_check_flag2: whether somatic sites exists. 
 				somatic_finish_flag2,somatic_check_flag2,Tumor_check_line,Tumor_check_num = check_Somatic_interpretation(root+'/'+dir)
-				somatic_flag3 = False
 
+				#flag4 somatic_flag3: whether somatic sites exists and somatic analysis is finished or not.
+				somatic_flag3 = False
 				if somatic_finish_flag2 == True and somatic_check_flag2 == False:
 					somatic_flag3 = True
 
-
-				#flag5 total_close_sites	
+				#flag5 total_close_sites: check warnClose.txt, if sites exist, then create samtools command and mail it.	
 				total_close_sites = []
 				pos_list = []
 				samp = '';chr='';start='';
@@ -304,50 +396,51 @@ def multi_check(root,panel):
 							continue
 						else:
 							need_checked_list.append(line.strip())
-				if 1 == 1:					
+				   
+				if True:					
 					for line in need_checked_list:
 						if line.strip() != '':
 							array = line.strip().split('\t')
 							total_close_sites.append(line.strip())
-							print(array[0:3])
 							samp,chr,start = array[0:3]
 							this_gene = array[8].split(':')[0]
 							zhushi_gene = NM_dic1.get(this_gene,'--') +'/'+ NM_dic2.get(this_gene,'--') +'/'+ NM_dic3.get(this_gene,'--') 
 							pos_list.append(int(start))
 							min_pos = str(min(pos_list)-1)
 						elif line.strip() == '' :
-							samcmd = '\n/share/public/software/samtools-1.3/samtools tview %s/%s/./aln/%s/*.cons.bam --reference /share/work3/capsmart/pipeline/capSMART/CAPcSMART/capSMART/cSMART170503/reference/hg19.fasta -p %s:%s|grep -i [1atgc*]|les\n\nMainTranscript:%s\n\n=================\n\n'%(root,dir,samp,chr,min_pos,zhushi_gene)
+							samcmd = '\n%s tview %s/%s/./aln/%s/*.cons.bam --reference %s -p %s:%s|grep -i [1atgc*]|les\
+									\n\nMainTranscript:%s\n\n--------------------------\n\n'%(samtools,root,dir,samp,reference,chr,min_pos,zhushi_gene)
 							total_close_sites.append(samcmd)
 							pos_list = []
 							samp = '';chr='';start='';
 
 				time_sheet = dir2.replace('_sup','').replace('_auto','')+'.time.xls'
 				if total_close_sites == []:
-					mail_shell = '【请在合并为点后执行】:\ncd %s/%s;\n/share/work2/lisuxing/suxx/software/Python-3.6.1/bin/python3 /share/work1/xinghe/proc/captools/refresh_result/refresh.v1.test.py;\n/share/work2/lisuxing/suxx/software/Python-3.6.1/bin/python3 /share/work1/xinghe/proc/captools/refresh_result/refresh.v1.all.py;\n'%(root,dir)
+					mail_shell = '【refresh after merge】:\ncd %s/%s;\n%s %s;\n%s %s;\n'%(root,dir,python3,refreshtestpy,python3,refreshallpy)
 				else:
-					mail_shell = '【请在合并位点后执行】:\ncd %s/%s;\n/share/work2/lisuxing/suxx/software/Python-3.6.1/bin/python3 /share/work1/xinghe/proc/captools/refresh_result/refresh.v1.test.py -merge;\n/share/work2/lisuxing/suxx/software/Python-3.6.1/bin/python3 /share/work1/xinghe/proc/captools/refresh_result/refresh.v1.all.py -merge;\n'%(root,dir)
+					mail_shell = '【refresh after merge】:\ncd %s/%s;\n%s %s -merge;\n%s %s -merge;\n'%(root,dir,python3,refreshtestpy,python3,refreshallpy)
 	
 				warn_text = '\n'.join(total_close_sites) + '\n' + mail_shell	
-				subject = '[%s完]%s 【项目分析完成通知】'%(panel.strip('gene'),dir)
-				main_text = '\n\nHi 分析完成,\n\n\t%s批次马上完成分析，待germline/CNV/需合并位点整理完毕后再向报告组反馈结果。\n\n\t数据路径：%s/%s\n\n【待合并的位点及命令】:\n\n%s\n '%(dir,root,dir,warn_text)
-				mail_1(dir=dir,to_list = ['xingh3223@berryoncology.com'],cc_list = [],subject=subject,main_text=main_text)
+				subject = '%s-%s完-%s'%(area,panel.strip('gene'),dir)
+				main_text = '\n\nHi,\n\n\tAnalysis of %s is over \
+							\n\n\tData path is %s/%s\n\n【merging commands】:\n\n%s\n '%(dir,root,dir,warn_text)
+				mailer(dir=dir,subject=subject,main_text=main_text,**dict(default_sender,**default_receiver))
 
-				#flag6 msi_check
+				#flag6 msi_check: mail the MSI result to report group.
 				if panel == '654gene' and re.search(r'_654T_',dir):
 					msi_html = msi_check(root+'/'+dir)
-					subject = '[%sMSI] %s '%(panel.strip('gene'),dir)
-					msi_cc_list = ['jiangdzh3403@berryoncology.com','wangzx3872@berryoncology.com','wujq3870@berryoncology.com','wun3623@berryoncology.com','xingh3223@berryoncology.com' ]		
-					mail_1(dir=dir,to_list = ['oncology_labreport@berryoncology.com'],cc_list = msi_cc_list,subject=subject,main_text=msi_html,formatting='html')
+					subject = '%s-%sMSI-%s '%(area,panel.strip('gene'),dir)
+					mailer(dir=dir,subject=subject,main_text=msi_html,formatting='html',**dict(default_sender,**msi_receiver))
 
 			
 				rewrite(FC=dir,done_file=type_done_file)
 				
-				#flag7 hebing_flag2
+				#flag7 hebing_flag2: check if there are sites that need to be merged.
 				hebing_flag2 = False
 				if total_close_sites == []:
 					hebing_flag2 = True
 			
-				#flag8 pair_txt_list_flag
+				#flag8 pair_txt_list_flag: whether only Silico sample exists.
 				pair_txt = root+'/%s/pair.txt'%(dir)
 				pair_txt_list_flag = True
 				if os.path.exists(pair_txt):	
@@ -356,78 +449,48 @@ def multi_check(root,panel):
 					pair_txt_list = []
 				if pair_txt_list == []:
 					pair_txt_list_flag = False
-				
 
-				#judgement of different panel	
-				print('status_done,hebing_flag2,germline_flag2,pair_txt_list_flag')
-				print(status_done,hebing_flag2,germline_flag2,pair_txt_list_flag)
-				
-				if dir == '200529_Novaseq_A00838_B_BH3MHGDSXY_csmart2_0_SPL_v11_457_auto_sup':
+				if status_done == True and hebing_flag2 == True and germline_flag2 == True \
+							and pair_txt_list_flag == True and somatic_flag3 == True:
 					ssh = paramiko.SSHClient()
 					ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 					ssh.connect(hostname='10.100.2.10',port=22,username='capsmart',password='berry2012')
-					stdin,stdout,stderr = ssh.exec_command('ls %s/%s'%(root,dir))
-					stdin, stdoutline, stderr = ssh.exec_command("export LANG=zh_CN.UTF-8;export LC_ALL=en_GB.UTF-8;cd %s/%s;/share/work1/xinghe/software/anaconda3/bin/python /share/work1/xinghe/proc/captools/refresh_result/refresh.v1.all.py"%(root,dir))
-
-				#不管是否有需要checkgermline的位点
-				elif status_done == True and hebing_flag2 == True and re.search(r'_31gene',root) and pair_txt_list_flag == True and re.search(r'20080[67]',dir) and germline_flag2 == True and somatic_flag3 == True:
-				#germline等都需要check
-					ssh = paramiko.SSHClient()
-					ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-					ssh.connect(hostname='10.100.2.10',port=22,username='capsmart',password='berry2012')
-					stdin,stdout,stderr = ssh.exec_command('ls %s/%s'%(root,dir))
-					stdin, stdoutline, stderr = ssh.exec_command('cd %s/%s;python /share/Onc_SmallPanel/capsmart_31gene/addReportTime.py %s ;grep reportSimple_production run.sh> aaa.sh;/bin/sh aaa.sh; /share/public/software/Onc_Soft/python/2.7.14/bin/python /share/Onc_SmallPanel/capsmart_31gene/mail_capsmart_new_v3.py -f %s %s.xls;echo finish > finish.txt'%(root,dir,time_sheet,dir,dir))
-					mail31_err = stderr.read()
-					if mail31_err != '':
-						youjian = 'hi,\n\n该批次已完成,但是在发邮件时出了问题,请检查文件名是否正确:\ncd %s/%s;\npython /share/Onc_SmallPanel/capsmart_31gene/addReportTime.py %s\n;/share/public/software/Onc_Soft/python/2.7.14/bin/python /share/Onc_SmallPanel/capsmart_31gene/mail_capsmart_new.py -f %s %s.xls\nError内容:\n%s'%(root,dir,time_sheet,dir,dir,mail31_err)
-						subject = '31gene报错'
-						mail_1(dir=dir,to_list = ['xingh3223@berryoncology.com'],cc_list = [],subject=subject,main_text=youjian)
-
-				elif status_done == True and hebing_flag2 == True and germline_flag2 == True and re.search(r'86gene',root) and pair_txt_list_flag == True and somatic_flag3 == True:
-					ssh = paramiko.SSHClient()
-					ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-					ssh.connect(hostname='10.100.2.10',port=22,username='capsmart',password='berry2012')
-					stdin,stdout,stderr = ssh.exec_command('ls %s/%s'%(root,dir))
-					stdin, stdoutline, stderr = ssh.exec_command("export LANG=zh_CN.UTF-8;export LC_ALL=en_GB.UTF-8;cd %s/%s;/share/work1/xinghe/software/anaconda3/bin/python /share/work1/xinghe/proc/captools/refresh_result/refresh.v1.all.py"%(root,dir))
-				elif status_done == True and hebing_flag2 == True and germline_flag2 == True and re.search(r'654gene',root) and pair_txt_list_flag == True and somatic_flag3 == True:
-					ssh = paramiko.SSHClient()
-					ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-					ssh.connect(hostname='10.100.2.10',port=22,username='capsmart',password='berry2012')
-					stdin,stdout,stderr = ssh.exec_command('ls %s/%s'%(root,dir))
-					stdin, stdoutline, stderr = ssh.exec_command("export LANG=zh_CN.UTF-8;export LC_ALL=en_GB.UTF-8;cd %s/%s;/share/work1/xinghe/software/anaconda3/bin/python /share/work1/xinghe/proc/captools/refresh_result/refresh.v1.all.py"%(root,dir))
+					if re.search(r'_31genexxx',root):
+						stdin,stdout,stderr = ssh.exec_command('ls %s/%s'%(root,dir))
+						stdin, stdoutline, stderr = ssh.exec_command('cd %s/%s;python %s %s ;grep reportSimple_production run.sh> aaa.sh;\
+										/bin/sh aaa.sh; %s %s -f %s %s.xls;echo finish > finish.txt'%(root,dir,addreporttime,time_sheet,python2,mail_capsmart,dir,dir))
+					elif re.search(r'86gene|654gene',root):
+						stdin,stdout,stderr = ssh.exec_command('ls %s/%s'%(root,dir))
+						stdin, stdoutline, stderr = ssh.exec_command("export LANG=zh_CN.UTF-8;export LC_ALL=en_GB.UTF-8;cd %s/%s;%s %s"%(root,dir,anaconda3,refreshallpy))
 
 
-def get_NM_dic():
-	NM_list = ['/share/work3/capsmart/pipeline/capSMART/CAPcSMART/bed/gene_NM.list','/share/public/database/Gynecological_cancer_backup/GTDB/MainNM_yrt_20191111.txt','/share/work1/wulj/database/svdb/rna/anndb/gene2trs.tsv']
-	NM_dic1 = {}
-	NM_dic2 = {}
-	NM_dic3 = {}
-	i = 0
-	for each in NM_list:
-		i +=1
-		for line in open(each,'r'):
-			gene,NM = line.strip().split('\t')[0:2]
-			dic_id = 'NM_dic'+str(i)
-			locals()[dic_id][gene] = NM	
-	return NM_dic1, NM_dic2, NM_dic3
+'''make configures '''
+if __name__ == '__main__':
+	file = os.path.split(os.path.realpath(__file__))[0]
+	config_file = file + '/config.ini'
+	config = configparser.ConfigParser()
+	config.read(config_file)
+	solo_path = dict(config['path'].items())
+	prog = dict(config['prog'].items())
+	globals().update(solo_path)
+	globals().update(prog)
+	NM_list = get_list(nm_list)
+	roots = get_list(roots)
+	#senders
+	default_sender = config['default_sender']
+	germline_sender = config['germline_sender']
+	report_sender = config['report_sender']
+	#receivers
+	default_receiver = config['default_receiver']
+	germline_receiver = config['germline_receiver']
+	msi_receiver = config['msi_receiver']
+	#others
+	check_cols_ini = [int(i) for i in get_list(config['qc_check']['check_cols_ini'])]
 
-NM_dic1, NM_dic2, NM_dic3 = get_NM_dic()	
+	NM_dic1, NM_dic2, NM_dic3 = get_NM_dic()
+
+	for root in roots:
+		panel = panel_check(root)
+		multi_check(root,panel)
 
 
-roots = ['/share/Onc_SmallPanel/capsmart_86gene','/share/Onc_LargePanel/capsmart_457gene','/share/Onc_LargePanel/capsmart_654gene','/share/Onc_SmallPanel/capsmart_86gene/KYONF2019501','/share/Onc_SmallPanel/capsmart_31gene','/share/Onc_SmallPanel/capsmart_31gene/LC_CRC','/share/Onc_SmallPanel/WES_Plus']
-for root in roots:
-	if re.search(r'86gene',root):
-		panel = '86gene'
-	elif re.search(r'457gene',root):
-		panel = '457gene'
-	elif re.search(r'654gene',root):
-		panel = '654gene'
-	elif re.search(r'31gene',root) and not re.search('/LC_CRC',root):
-		panel = '31gene'
-	elif re.search(r'31gene',root) and re.search('/LC_CRC',root):
-		panel = '13gene'
-	elif re.search(r'WES_Plus',root):
-		panel = 'WESPlus'
-	else:
-		panel = 'unknow_panel'
-	multi_check(root,panel)
